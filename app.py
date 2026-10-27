@@ -1,78 +1,78 @@
-import pandas as pd
+import numpy as np
+import plotly.express as px
 import streamlit as st
 
-from src.data_loader import load_data
+from src.data_loader import load_data  # ajuste o nome se a função tiver outro nome
 
-st.set_page_config(
-    page_title="Avaliação de Correlação entre Variáveis Quantitativas do Heart Disease Dataset",
-    layout="wide",
+st.set_page_config(page_title="Flags — EDA", layout="wide")
+
+
+@st.cache_data
+def get_data():
+    df = load_data()
+    return df.drop(columns=["image"], errors="ignore")
+
+
+df = get_data()
+
+# Variáveis realmente numéricas (landmass, zone, language e religion são códigos categóricos)
+NUM_VARS = [
+    c for c in ["area", "population", "colours", "bars", "stripes",
+                "circles", "crosses", "saltires", "quarters", "sunstars"]
+    if c in df.columns
+]
+
+# ---------------------------------------------------------------- Sidebar
+st.sidebar.header("Filtros")
+
+vars_sel = st.sidebar.multiselect(
+    "Variáveis", NUM_VARS,
+    default=[v for v in ["area", "population", "colours", "stripes", "sunstars"] if v in NUM_VARS],
 )
 
-st.title("Avaliação de Correlação entre Variáveis Quantitativas do Heart Disease Dataset")
+var_hist = st.sidebar.selectbox("Variável do histograma e do intervalo", vars_sel or NUM_VARS)
 
-df = load_data()
+col_min, col_max = float(df[var_hist].min()), float(df[var_hist].max())
+if col_min < col_max:
+    intervalo = st.sidebar.slider(f"Intervalo de {var_hist}", col_min, col_max, (col_min, col_max))
+else:
+    intervalo = (col_min, col_max)
+    st.sidebar.caption(f"{var_hist} tem valor único ({col_min:g}).")
 
-# Variáveis quantitativas do estudo (mesma lista VARS_QUANT do notebook de EDA)
-VARS_QUANT = ["age", "trestbps", "chol", "thalach", "oldpeak"]
+metodo = st.sidebar.selectbox("Correlação", ["spearman", "pearson", "kendall"])
+usar_log = st.sidebar.checkbox("Histograma em log1p", value=False)
+nbins = st.sidebar.slider("Nº de bins", 5, 60, 20)
 
-# Sidebar: filtros (variáveis + intervalo)
-with st.sidebar:
-    st.header("Filtros")
+# ---------------------------------------------------------------- Filtragem
+df_f = df[df[var_hist].between(*intervalo)]
 
-    variaveis = st.multiselect(
-        "Variáveis Quantitativas",
-        options=VARS_QUANT,
-        default=VARS_QUANT,
-        help="Selecione as variáveis quantitativas que deseja analisar no dashboard.",
-    )
+st.title("Flags — Correlação e Distribuição")
+st.caption(f"{len(df_f)} de {len(df)} países após o filtro de intervalo.")
 
-    separar_por_classe = st.toggle(
-        "Distinguir por Classe",
-        value=False,
-        help="Colore a distribuição pela classe (doenca_cardiaca: Normal ou Cardíaco).",
-    )
+# ---------------------------------------------------------------- Layout
+c_corr, c_dist = st.columns([2, 3])
 
-    # Um slider de intervalo para cada variável selecionada
-    intervalos = {}
-    for var in variaveis:
-        if pd.api.types.is_integer_dtype(df[var]):
-            minimo, maximo, passo = int(df[var].min()), int(df[var].max()), 1
-        else:
-            minimo, maximo, passo = float(df[var].min()), float(df[var].max()), 0.1
-        intervalos[var] = st.slider(
-            f"Intervalo de {var}",
-            min_value=minimo,
-            max_value=maximo,
-            value=(minimo, maximo),
-            step=passo,
-            key=f"intervalo_{var}",
-        )
-
-# Mantém só os pacientes dentro de todos os intervalos escolhidos
-df_filtrado = df
-for var, (inicio, fim) in intervalos.items():
-    df_filtrado = df_filtrado[df_filtrado[var].between(inicio, fim)]
-
-st.caption(f"{len(df_filtrado)} de {len(df)} pacientes dentro dos intervalos escolhidos.")
-
-# Dashboard 1: correlação (heatmap) à esquerda, distribuição (histograma) à direita
-col_correlacao, col_distribuicao = st.columns([1, 1.5])
-
-with col_correlacao:
-    st.subheader("Correlação")
-
-    if len(variaveis) < 2:
-        st.warning("Selecione pelo menos 2 variáveis para calcular a correlação.")
+with c_corr:
+    st.subheader("Correlação (heatmap)")
+    if len(vars_sel) < 2:
+        st.info("Selecione ao menos 2 variáveis na sidebar.")
+    elif len(df_f) < 3:
+        st.warning("Poucos países no intervalo para calcular correlação.")
     else:
-        # TODO: matriz de correlação das variáveis selecionadas (df_filtrado[variaveis].corr())
-        # TODO: heatmap (plotly px.imshow) e exibir com st.plotly_chart
-        pass
+        corr = df_f[vars_sel].corr(method=metodo)
+        fig = px.imshow(corr, text_auto=".2f", zmin=-1, zmax=1,
+                        color_continuous_scale="RdBu_r", aspect="auto")
+        st.plotly_chart(fig, width="stretch")
+        st.caption("Células vazias = variável constante no intervalo filtrado.")
 
-with col_distribuicao:
-    st.subheader("Distribuição")
-
-    # TODO: st.selectbox para escolher a variável do histograma
-    # TODO: histograma (plotly px.histogram) e exibir com st.plotly_chart
-    #       se separar_por_classe: color="doenca_cardiaca"
-
-# TODO: Dashboard 2 — KPIs (Aula 22)
+with c_dist:
+    st.subheader(f"Distribuição (histograma) — {var_hist}")
+    if df_f.empty:
+        st.warning("Nenhum país no intervalo selecionado.")
+    else:
+        x = np.log1p(df_f[var_hist]) if usar_log else df_f[var_hist]
+        fig = px.histogram(x=x, nbins=nbins, marginal="box",
+                           labels={"x": f"log1p({var_hist})" if usar_log else var_hist})
+        fig.update_layout(yaxis_title="Nº de países", bargap=0.05)
+        st.plotly_chart(fig, width="stretch")
+        st.caption(f"Assimetria (skew): {x.skew():.2f}")
