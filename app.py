@@ -5,25 +5,7 @@ import streamlit as st
 
 from src.data_loader import load_data
 
-# ------------------------------------------------------------------ Identidade visual
-# (as cores do tema da interface ficam em .streamlit/config.toml)
-LARANJA = "#F26B0F"
-AZUL = "#2A6F97"
-CREME = "#FFF7EC"
-TEXTO = "#3A3A3A"
-ESCALA_DIVERGENTE = [[0.0, AZUL], [0.5, CREME], [1.0, LARANJA]]  # azul (−1) → creme (0) → laranja (+1)
-
-
-def estilo(fig):
-    """Deixa os gráficos do Plotly com a identidade do app (aplicar antes de ajustes próprios)."""
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font_color=TEXTO,
-        margin=dict(l=10, r=10, t=30, b=10),
-    )
-    return fig
-
+# Identidade visual: as cores da interface e dos gráficos ficam em .streamlit/config.toml
 
 # Rótulos dos códigos numéricos (conferir com a descrição do dataset Flags)
 ROTULOS = {
@@ -172,9 +154,7 @@ def dashboard_1():
                     x=dados_plot,
                     nbins=nbins,
                     labels={"x": rotulo, "y": ""},
-                    color_discrete_sequence=[LARANJA],
                 )
-                estilo(fig)
                 fig.update_layout(
                     title=dict(text=var, font=dict(size=14)),
                     height=210,
@@ -212,10 +192,9 @@ def dashboard_1():
                 text_auto=".2f",
                 zmin=-1,
                 zmax=1,
-                color_continuous_scale=ESCALA_DIVERGENTE,
+                color_continuous_scale="PuOr_r",  # divergente: roxo (−1) → branco (0) → laranja (+1)
                 aspect="auto",
             )
-            estilo(fig_c)
             fig_c.update_layout(height=450, margin=dict(l=10, r=10, t=40, b=10))
 
             st.plotly_chart(fig_c, width="stretch", key="heatmap_correlacao")
@@ -297,10 +276,10 @@ def dashboard_2():
         dados = tabela.reset_index()
         eixo = nome_metrica if coluna is not None else "Nº de países"
         fig = px.bar(dados, x=eixo, y="Grupo", orientation="h",
-                     text_auto=".0f" if coluna is None else ".1f",
-                     color_discrete_sequence=[LARANJA])
+                     text_auto=".0f" if coluna is None else ".1f")
         fig.update_yaxes(categoryorder="total ascending", title=None)
-        st.plotly_chart(estilo(fig), width="stretch")
+        fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
+        st.plotly_chart(fig, width="stretch")
     with c_tab:
         st.subheader("Tabela do agrupamento")
         st.dataframe(tabela.round(1), width="stretch")
