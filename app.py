@@ -1,3 +1,4 @@
+import altair as alt
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -26,14 +27,25 @@ st.set_page_config(page_title="Flags — EDA", layout="wide")
 @st.cache_data
 def get_data():
     df = load_data().drop(columns=["image"], errors="ignore")
-    # Discretização: divide os países pela mediana da população
-    df["population_category"] = np.where(
-        df["population"] <= df["population"].median(), "Baixa (≤ mediana)", "Alta (> mediana)"
-    )
+    if "population" in df.columns:
+        # Discretização: divide os países pela mediana da população
+        df["population_category"] = np.where(
+            df["population"] <= df["population"].median(), "Baixa (≤ mediana)", "Alta (> mediana)"
+        )
     return df
 
 
 df = get_data()
+
+# Confere se o CSV é o do Flags antes de montar o dashboard
+faltando = [c for c in ("area", "population") if c not in df.columns]
+if faltando:
+    st.error(
+        f"O arquivo data/clean/dataset.csv não tem as colunas {faltando}. "
+        "Ele precisa ser o dataset Flags tratado (exportado pelo notebook)."
+    )
+    st.write("Colunas encontradas no arquivo:", list(df.columns))
+    st.stop()
 
 # landmass, zone, language e religion são códigos categóricos: ficam fora das variáveis numéricas
 NUM_VARS = [
@@ -237,6 +249,9 @@ def dashboard_2():
     nome_metrica = w2.selectbox("Métrica da barra", list(METRICAS), key="metrica")
     coluna, funcao = METRICAS[nome_metrica]
 
+    # Os KPIs aparecem no topo, mas só dá para calculá-los depois do gráfico (que traz a seleção)
+    area_kpis = st.container()
+
     # Agrupamento: troca códigos por rótulos legíveis
     rotulo_grupo = df[grupo].map(ROTULOS.get(grupo, {})).fillna(df[grupo].astype(str))
     g = df.assign(grupo=rotulo_grupo)
@@ -250,39 +265,81 @@ def dashboard_2():
     tabela = tabela.sort_values(nome_metrica if coluna is not None else "Nº de países", ascending=False)
     tabela.index.name = "Grupo"
 
-    # KPIs
+    # KPIs do agrupamento
     p = contagem / contagem.sum()
     k = len(p)
     balanceamento = float(-(p * np.log(p)).sum() / np.log(k)) if k > 1 else None
     lider = tabela.index[0]
     valor_lider = tabela[nome_metrica if coluna is not None else "Nº de países"].iloc[0]
 
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Nº de grupos", k,
-              help="Quantas categorias a variável escolhida tem.")
-    k2.metric("Maior grupo", str(contagem.index[0]),
-              delta=f"{p.iloc[0]:.1%} dos países", delta_color="off",
-              help="Categoria com mais países.")
-    k3.metric("Balanceamento (0 a 1)", f"{balanceamento:.2f}" if balanceamento is not None else "—",
-              help="Entropia normalizada. Perto de 0 = um grupo domina. Perto de 1 = grupos parecidos.")
-    k4.metric(f"Grupo líder — {nome_metrica}", str(lider),
-              delta=f"{valor_lider:,.0f}" if coluna is None else f"{valor_lider:,.1f}", delta_color="off",
-              help="Grupo com o maior valor da métrica escolhida.")
-
-    # Gráfico de barras + tabela
+    # Gráfico de barras (Altair) com seleção por clique
     c_bar, c_tab = st.columns([3, 2])
     with c_bar:
         st.subheader(f"{nome_metrica} por {GRUPOS[grupo].split(' (')[0].lower()}")
-        dados = tabela.reset_index()
         eixo = nome_metrica if coluna is not None else "Nº de países"
-        fig = px.bar(dados, x=eixo, y="Grupo", orientation="h",
-                     text_auto=".0f" if coluna is None else ".1f")
-        fig.update_yaxes(categoryorder="total ascending", title=None)
-        fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, width="stretch")
+        formato = ".0f" if coluna is None else ".1f"
+        dados = tabela.reset_index().rename(columns={eixo: "valor"})
+
+        clique = alt.selection_point(name="clique", fields=["Grupo"])
+        base = alt.Chart(dados).encode(
+            y=alt.Y("Grupo:N", sort=alt.EncodingSortField(field="valor", order="descending"), title=None),
+            x=alt.X("valor:Q", title=eixo),
+        )
+        barras = (
+            base.mark_bar()
+            .encode(
+                opacity=alt.condition(clique, alt.value(1), alt.value(0.35)),
+                tooltip=[alt.Tooltip("Grupo:N"), alt.Tooltip("valor:Q", title=eixo, format=formato)],
+            )
+            .add_params(clique)
+        )
+        rotulos = base.mark_text(align="left", dx=4).encode(text=alt.Text("valor:Q", format=formato))
+
+        # A chave inclui o agrupamento: cada "Agrupar por" tem a sua própria seleção
+        evento = st.altair_chart(barras + rotulos, key=f"barras_{grupo}", on_select="rerun", width="stretch")
+        st.caption("Clique numa barra para selecionar um grupo (shift + clique seleciona mais de um).")
+
+    # Seleção -> Python (ignora seleção antiga de outro agrupamento)
+    itens = evento.selection.get("clique", [])
+    selecionados = [i.get("Grupo") for i in itens if i.get("Grupo") in set(contagem.index)]
+    sel = g[g["grupo"].isin(selecionados)] if selecionados else None
+
+    # KPIs (5): 4 do agrupamento + 1 que reage à seleção
+    with area_kpis:
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("Nº de grupos", k,
+                  help="Quantas categorias a variável escolhida tem.")
+        k2.metric("Maior grupo", str(contagem.index[0]),
+                  delta=f"{p.iloc[0]:.1%} dos países", delta_color="off",
+                  help="Categoria com mais países.")
+        k3.metric("Balanceamento (0 a 1)", f"{balanceamento:.2f}" if balanceamento is not None else "—",
+                  help="Entropia normalizada. Perto de 0 = um grupo domina. Perto de 1 = grupos parecidos.")
+        k4.metric("Grupo líder", str(lider),
+                  delta=f"{valor_lider:,.0f}" if coluna is None else f"{valor_lider:,.1f}", delta_color="off",
+                  help=f"Grupo com o maior valor de: {nome_metrica}.")
+        if sel is not None:
+            if coluna is None:
+                delta_sel = f"{len(sel) / len(g):.1%} dos países"
+            else:
+                delta_sel = f"{nome_metrica.split(' (')[0]}: {sel[coluna].agg(funcao):,.1f}"
+            k5.metric("Países na seleção", f"{len(sel)} de {len(g)}",
+                      delta=delta_sel, delta_color="off",
+                      help="Países dos grupos clicados no gráfico, com a métrica calculada só sobre eles.")
+        else:
+            k5.metric("Países na seleção", "—",
+                      help="Clique em uma barra do gráfico para selecionar um grupo.")
+
     with c_tab:
         st.subheader("Tabela do agrupamento")
         st.dataframe(tabela.round(1), width="stretch")
+
+        if sel is not None:
+            st.subheader("Países na seleção")
+            cols_sel = [c for c in ["name", "grupo", "area", "population", "colours"] if c in sel.columns]
+            st.dataframe(
+                sel[cols_sel].rename(columns={"grupo": "Grupo"}).sort_values(cols_sel[0]),
+                width="stretch", hide_index=True,
+            )
 
 
 # ------------------------------------------------------------------ Tabs
